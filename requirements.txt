@@ -1,0 +1,5 @@
+spotipy
+ytmusicapi
+fuzzywuzzy
+python-Levenshtein
+aiohttp

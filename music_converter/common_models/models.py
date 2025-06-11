@@ -17,3 +17,4 @@ class Playlist:
     description: Optional[str] = ""
     spotify_id: Optional[str] = None
     youtube_id: Optional[str] = None
+    total_tracks_from_api: Optional[int] = None # Added field

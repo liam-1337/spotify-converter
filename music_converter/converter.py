@@ -1,34 +1,13 @@
 import os
 import sys
+from typing import Optional, List # Ensure List is imported
 
 # Attempt to set up relative imports if running as a script
 # This helps locate modules when the script is run directly from its directory
 if __name__ == '__main__' and "." not in __package__:
-    # Assuming the script is in 'music_converter' and 'common_models', 'spotify', 'youtube_music' are siblings
-    # Or if it's one level down, adjust path accordingly.
-    # This is a common pattern but might need adjustment based on exact execution context.
-    # If 'music_converter' is the root package:
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    parent_dir = os.path.dirname(script_dir) # Go up one level if converter.py is inside a 'scripts' or 'app' dir
-                                          # If converter.py is at the root of the package, this line is not needed
-                                          # For our current structure, converter.py is at the root of the package 'music_converter'
-                                          # so common_models etc are submodules.
-    # If music_converter itself is the top-level package:
-    # sys.path.insert(0, os.path.dirname(script_dir)) # Add parent of 'music_converter' if needed
-    # No, for current structure, if running 'python music_converter/converter.py', then 'music_converter' is not a package in path
-    # We need to add the directory *containing* 'music_converter' to the path.
-    # Or, better, run as 'python -m music_converter.converter' from outside.
-
-    # For 'python music_converter/converter.py' from one level up:
-    # sys.path.insert(0, os.getcwd()) # Add current working directory (parent of music_converter)
-
-    # If running 'python converter.py' from *inside* 'music_converter' directory:
-    if script_dir not in sys.path: # Current script's directory
+    if script_dir not in sys.path:
          sys.path.insert(0, script_dir)
-    # Add parent directory to sys.path to allow imports like 'from spotify.client import SpotifyClient'
-    # if 'music_converter' is meant to be the package.
-    # This is tricky. Standard way is to run 'python -m music_converter.converter' from the directory *above* music_converter.
-    # The below imports assume that 'music_converter' package is in sys.path.
 
 try:
     from spotify.client import SpotifyClient
@@ -38,7 +17,6 @@ except ImportError as e:
     print(f"Error importing modules in converter.py: {e}")
     print("Please ensure you are running this script as part of the 'music_converter' package,")
     print("e.g., using 'python -m music_converter.converter' from the directory containing 'music_converter'.")
-    # Define dummy classes if imports fail, to allow the script to be parsed at least
     class SpotifyClient:
         def __init__(self, *args, **kwargs): print("Dummy SpotifyClient used in converter")
         def get_user_playlists(self, limit=5): return []
@@ -47,214 +25,313 @@ except ImportError as e:
     class YouTubeMusicClient:
         def __init__(self, *args, **kwargs): print("Dummy YouTubeMusicClient used in converter")
         def find_track_match(self, track): return None
-        def create_playlist(self, name, description): return "dummy_yt_playlist_id"
+        def create_playlist(self, name, description, public=True): return "dummy_yt_playlist_id" # Match signature
         def add_tracks_to_playlist(self, pl_id, tr_ids): return False
-    class Playlist: pass
-    class Track: pass
-    # sys.exit(1) # Optionally exit if imports fail critically
+    # Ensure dummy models match field expectations if real ones aren't loaded
+    class Track:
+        def __init__(self, title: str, artist: str, album: Optional[str]=None, duration_ms: Optional[int]=0, spotify_id: Optional[str]=None, youtube_id: Optional[str]=None):
+            self.title = title
+            self.artist = artist
+            self.album = album
+            self.duration_ms = duration_ms
+            self.spotify_id = spotify_id
+            self.youtube_id = youtube_id
+    class Playlist:
+        def __init__(self, name: str, tracks: List[Track], description: Optional[str]="", spotify_id: Optional[str]=None, youtube_id: Optional[str]=None, total_tracks_from_api: Optional[int]=None):
+            self.name = name
+            self.tracks = tracks
+            self.description = description
+            self.spotify_id = spotify_id
+            self.youtube_id = youtube_id
+            self.total_tracks_from_api = total_tracks_from_api
 
-def transfer_spotify_to_youtube_music(spotify_api_token: str):
+
+def transfer_spotify_to_youtube_music(spotify_api_token: str, ytm_auth_json_path: Optional[str] = None):
     """
     Main function to transfer playlists and liked songs
-    from Spotify to YouTube Music.
-    Uses a live SpotifyClient and a stubbed YouTubeMusicClient.
+    from Spotify to YouTube Music using live clients.
     """
-    print("🚀 Starting Spotify to YouTube Music transfer process...")
+    print("🚀🚀🚀 Starting Spotify to YouTube Music LIVE transfer process... 🚀🚀🚀")
+    print(f"Spotify Token: {'Provided' if spotify_api_token and spotify_api_token != 'INVALID_SPOTIFY_TOKEN' else 'MISSING/Invalid'}")
+    print(f"YTM Auth JSON: {ytm_auth_json_path if ytm_auth_json_path else 'Not Provided'}")
+
 
     # Initialize clients
+    print("\n🎧 Initializing Spotify Client...")
     spotify_client = SpotifyClient(api_token=spotify_api_token)
-    # YouTubeMusicClient is a stub and doesn't need a real token for now
-    youtube_music_client = YouTubeMusicClient()
 
-    # 1. Get Spotify Playlists
+    print("🎧 Initializing YouTube Music Client...")
+    youtube_music_client = YouTubeMusicClient(auth_headers_file_path=ytm_auth_json_path)
+
+    # --- 1. Process Spotify Playlists ---
     print("\n🎵 --- Fetching Spotify Playlists (max 5) ---")
     try:
         spotify_playlists = spotify_client.get_user_playlists(limit=5)
-    except Exception as e:
-        print(f"  ❌ ERROR fetching Spotify playlists: {e}")
-        spotify_playlists = []
+        if not spotify_playlists: # Handles None or empty list
+            print("  ⚠️ No Spotify playlists found or an error occurred during fetch. Skipping playlist transfer.")
+        else:
+            print(f"  ✅ Successfully fetched {len(spotify_playlists)} Spotify playlists.")
+    except Exception as e: # Catch any exception from client call itself
+        print(f"  ❌ CRITICAL ERROR fetching Spotify playlists: {e}")
+        spotify_playlists = [] # Ensure it's an empty list to prevent further errors
 
-    if not spotify_playlists:
-        print("  No Spotify playlists found or an error occurred. Skipping playlist transfer.")
-    else:
-        print(f"  ✅ Found {len(spotify_playlists)} Spotify playlists.")
-
+    if spotify_playlists: # Check if list is not empty
         for sp_playlist in spotify_playlists:
-            print(f"\n  🔄 Processing Spotify playlist: '{sp_playlist.name}' (ID: {sp_playlist.spotify_id}, API Tracks: {sp_playlist.total_tracks_from_api})")
+            if not sp_playlist or not hasattr(sp_playlist, 'spotify_id') or not sp_playlist.spotify_id : # Basic check on playlist object
+                print(f"  Skipping invalid Spotify playlist object: {sp_playlist}")
+                continue
 
-            # 2. Get tracks for each Spotify playlist
+            print(f"\n  🔄 Processing Spotify playlist: '{sp_playlist.name}' (ID: {sp_playlist.spotify_id}, API Tracks: {getattr(sp_playlist, 'total_tracks_from_api', 'N/A')})")
+
             actual_tracks_in_playlist: List[Track] = []
-            if sp_playlist.spotify_id and (sp_playlist.total_tracks_from_api is None or sp_playlist.total_tracks_from_api > 0) :
-                print(f"    Fetching tracks for '{sp_playlist.name}' (max 10)...") # Limit tracks per playlist for demo
+            # Use getattr for total_tracks_from_api for safety with dummy objects
+            total_tracks = getattr(sp_playlist, 'total_tracks_from_api', 0)
+            if total_tracks is None or total_tracks > 0: # if None, we attempt fetch
+                print(f"    Fetching tracks for '{sp_playlist.name}' (max 10)...")
                 try:
+                    # Assuming get_playlist_tracks returns List[Track] or raises error
                     actual_tracks_in_playlist = spotify_client.get_playlist_tracks(sp_playlist.spotify_id, limit=10)
-                    sp_playlist.tracks = actual_tracks_in_playlist # Update our playlist object
-                    if actual_tracks_in_playlist:
-                        print(f"    ✅ Fetched {len(actual_tracks_in_playlist)} tracks for '{sp_playlist.name}'.")
+                    # sp_playlist.tracks = actual_tracks_in_playlist # Update our playlist object - careful if dummy
+                    if hasattr(sp_playlist, 'tracks'):
+                         sp_playlist.tracks = actual_tracks_in_playlist
+
+                    if actual_tracks_in_playlist: # Check if list is not empty
+                        print(f"    ✅ Successfully fetched {len(actual_tracks_in_playlist)} tracks for '{sp_playlist.name}'.")
                     else:
                         print(f"    ⚠️ No tracks returned by API for '{sp_playlist.name}' (or fetch limit was 0).")
                 except Exception as e:
                     print(f"    ❌ ERROR fetching tracks for '{sp_playlist.name}': {e}")
-            elif sp_playlist.total_tracks_from_api == 0:
-                print(f"    ⏩ Playlist '{sp_playlist.name}' has 0 tracks according to API, skipping track processing.")
+                    actual_tracks_in_playlist = [] # Ensure it's empty on error
+            elif total_tracks == 0:
+                print(f"    ⏩ Playlist '{sp_playlist.name}' has 0 tracks according to API. Skipping track processing.")
             else:
-                 print(f"    ⏩ Playlist '{sp_playlist.name}' has no ID or issue with track count, skipping track processing.")
+                 print(f"    ⏩ Playlist '{sp_playlist.name}' has issue with track count. Skipping track processing.")
 
-
-            if not actual_tracks_in_playlist:
+            if not actual_tracks_in_playlist: # Check if list is empty
                 print(f"    No tracks to process for Spotify playlist '{sp_playlist.name}'. Skipping YouTube Music playlist creation for this one.")
                 continue
 
-            # 3. Create a corresponding playlist on YouTube Music (simulated)
             yt_playlist_name = f"{sp_playlist.name} (From Spotify)"
-            yt_playlist_description = sp_playlist.description if sp_playlist.description else f"Converted from Spotify playlist '{sp_playlist.name}'"
+            yt_playlist_description = getattr(sp_playlist, 'description', "") if getattr(sp_playlist, 'description', "") else f"Converted from Spotify playlist '{sp_playlist.name}'"
 
-            print(f"    Attempting to create YouTube Music playlist: '{yt_playlist_name}' (simulated)...")
+            print(f"    Attempting to create YouTube Music playlist: '{yt_playlist_name}'...")
             yt_playlist_id = youtube_music_client.create_playlist(
                 name=yt_playlist_name,
-                description=yt_playlist_description
+                description=yt_playlist_description,
+                public=False
             )
-            print(f"    ✅ Simulated YouTube Music playlist created with ID: {yt_playlist_id}")
 
-            # 4. Find matches for each track and add to the new YouTube Music playlist (simulated)
+            if not yt_playlist_id:
+                print(f"    ❌ Failed to create YouTube Music playlist for '{sp_playlist.name}'. Skipping track additions for this playlist.")
+                continue
+
+            print(f"    ✅ Successfully created YouTube Music playlist '{yt_playlist_name}' with ID: {yt_playlist_id}")
+
             yt_track_ids_to_add = []
-            print(f"    Looking for YouTube Music matches for {len(actual_tracks_in_playlist)} tracks (simulated)...")
-            for track_num, sp_track in enumerate(actual_tracks_in_playlist):
-                print(f"      Track {track_num + 1}/{len(actual_tracks_in_playlist)}: '{sp_track.title}' by {sp_track.artist} (Spotify ID: {sp_track.spotify_id})")
-                yt_track_id = youtube_music_client.find_track_match(sp_track) # Stubbed call
+            print(f"    Looking for YouTube Music matches for {len(actual_tracks_in_playlist)} tracks...")
+            for track_num, sp_track_item in enumerate(actual_tracks_in_playlist):
+                if not sp_track_item or not hasattr(sp_track_item, 'title') or not hasattr(sp_track_item, 'artist'):
+                    print(f"      Skipping invalid Spotify track object at index {track_num}.")
+                    continue
+                print(f"      Track {track_num + 1}/{len(actual_tracks_in_playlist)}: '{sp_track_item.title}' by {sp_track_item.artist} (Spotify ID: {getattr(sp_track_item, 'spotify_id', 'N/A')})")
+                yt_track_id = youtube_music_client.find_track_match(sp_track_item)
                 if yt_track_id:
-                    print(f"        ➡️ Found simulated YouTube Music match: ID {yt_track_id}")
+                    print(f"        ➡️ Found YouTube Music match: ID {yt_track_id}")
                     yt_track_ids_to_add.append(yt_track_id)
                 else:
-                    print(f"        ❌ No simulated YouTube Music match found for '{sp_track.title}'.")
+                    print(f"        ❌ No YouTube Music match found for '{sp_track_item.title}'.")
 
             if yt_track_ids_to_add:
-                print(f"    Attempting to add {len(yt_track_ids_to_add)} matched tracks to YouTube Music playlist '{yt_playlist_name}' (ID: {yt_playlist_id}) (simulated)...")
-                youtube_music_client.add_tracks_to_playlist( # Stubbed call
+                print(f"    Attempting to add {len(yt_track_ids_to_add)} matched tracks to YTM playlist '{yt_playlist_name}' (ID: {yt_playlist_id})...")
+                add_success = youtube_music_client.add_tracks_to_playlist(
                     youtube_playlist_id=yt_playlist_id,
                     youtube_track_ids=yt_track_ids_to_add
                 )
+                if add_success:
+                    print(f"    ✅ Successfully called add_tracks_to_playlist for YTM playlist '{yt_playlist_name}'.")
+                else:
+                    print(f"    ❌ Failed to add tracks to YTM playlist '{yt_playlist_name}'.")
             else:
-                print(f"    No tracks to add to simulated YouTube Music playlist '{yt_playlist_name}'.")
+                print(f"    No tracks to add to YouTube Music playlist '{yt_playlist_name}'.")
 
-    # 5. Get Spotify Liked Songs & simulate adding to a "Liked Songs" playlist on YouTube Music
+    # --- 2. Process Spotify Liked Songs ---
     print("\n🎵 --- Fetching Spotify Liked Songs (max 10) ---")
     try:
         spotify_liked_songs = spotify_client.get_liked_songs(limit=10)
+        if not spotify_liked_songs:
+            print("  ⚠️ No Spotify liked songs found or an error occurred during fetch.")
+        else:
+            print(f"  ✅ Successfully fetched {len(spotify_liked_songs)} Spotify liked songs.")
     except Exception as e:
-        print(f"  ❌ ERROR fetching Spotify liked songs: {e}")
+        print(f"  ❌ CRITICAL ERROR fetching Spotify liked songs: {e}")
         spotify_liked_songs = []
 
-    if not spotify_liked_songs:
-        print("  No Spotify liked songs found or an error occurred.")
-    else:
-        print(f"  ✅ Found {len(spotify_liked_songs)} Spotify liked songs.")
-
+    if spotify_liked_songs:
         yt_liked_playlist_name = "Spotify Liked Songs (Imported)"
-        print(f"  Attempting to create YouTube Music playlist for Liked Songs: '{yt_liked_playlist_name}' (simulated)...")
+        print(f"  Attempting to create YTM playlist for Liked Songs: '{yt_liked_playlist_name}'...")
         yt_liked_playlist_id = youtube_music_client.create_playlist(
             name=yt_liked_playlist_name,
-            description="Songs you liked on Spotify"
+            description="Songs I liked on Spotify", # Corrected description
+            public=False
         )
-        print(f"  ✅ Simulated YouTube Music playlist for Liked Songs created with ID: {yt_liked_playlist_id}")
 
-        yt_liked_track_ids_to_add = []
-        print(f"  Looking for YouTube Music matches for {len(spotify_liked_songs)} liked songs (simulated)...")
-        for track_num, sp_track in enumerate(spotify_liked_songs):
-            print(f"    Liked Song {track_num + 1}/{len(spotify_liked_songs)}: '{sp_track.title}' by {sp_track.artist} (Spotify ID: {sp_track.spotify_id})")
-            yt_track_id = youtube_music_client.find_track_match(sp_track) # Stubbed call
-            if yt_track_id:
-                print(f"      ➡️ Found simulated YouTube Music match: ID {yt_track_id}")
-                yt_liked_track_ids_to_add.append(yt_track_id)
-            else:
-                print(f"      ❌ No simulated YouTube Music match found for liked song '{sp_track.title}'.")
-
-        if yt_liked_track_ids_to_add:
-            print(f"  Attempting to add {len(yt_liked_track_ids_to_add)} matched liked songs to playlist '{yt_liked_playlist_name}' (ID: {yt_liked_playlist_id}) (simulated)...")
-            youtube_music_client.add_tracks_to_playlist( # Stubbed call
-                youtube_playlist_id=yt_liked_playlist_id,
-                youtube_track_ids=yt_liked_track_ids_to_add
-            )
+        if not yt_liked_playlist_id:
+            print(f"  ❌ Failed to create YTM playlist for Liked Songs. Skipping adding liked songs.")
         else:
-            print(f"  No liked songs to add to simulated YouTube Music playlist '{yt_liked_playlist_name}'.")
+            print(f"  ✅ Successfully created YTM playlist for Liked Songs with ID: {yt_liked_playlist_id}")
 
-    print("\n🏁 Transfer simulation completed.")
+            yt_liked_track_ids_to_add = []
+            print(f"  Looking for YTM matches for {len(spotify_liked_songs)} liked songs...")
+            for track_num, sp_track_item in enumerate(spotify_liked_songs):
+                if not sp_track_item or not hasattr(sp_track_item, 'title') or not hasattr(sp_track_item, 'artist'):
+                    print(f"    Skipping invalid Spotify liked song object at index {track_num}.")
+                    continue
+                print(f"    Liked Song {track_num + 1}/{len(spotify_liked_songs)}: '{sp_track_item.title}' by {sp_track_item.artist} (Spotify ID: {getattr(sp_track_item, 'spotify_id', 'N/A')})")
+                yt_track_id = youtube_music_client.find_track_match(sp_track_item)
+                if yt_track_id:
+                    print(f"      ➡️ Found YTM match: ID {yt_track_id}")
+                    yt_liked_track_ids_to_add.append(yt_track_id)
+                else:
+                    print(f"      ❌ No YTM match found for liked song '{sp_track_item.title}'.")
+
+            if yt_liked_track_ids_to_add:
+                print(f"  Attempting to add {len(yt_liked_track_ids_to_add)} matched liked songs to YTM playlist '{yt_liked_playlist_name}'...")
+                add_success_liked = youtube_music_client.add_tracks_to_playlist(
+                    youtube_playlist_id=yt_liked_playlist_id,
+                    youtube_track_ids=yt_liked_track_ids_to_add
+                )
+                if add_success_liked:
+                    print(f"  ✅ Successfully called add_tracks_to_playlist for Liked Songs YTM playlist.")
+                else:
+                    print(f"  ❌ Failed to add tracks to Liked Songs YTM playlist.")
+            else:
+                print(f"  No liked songs to add to YTM playlist '{yt_liked_playlist_name}'.")
+
+    print("\n🏁🏁🏁 Transfer process finished. 🏁🏁🏁")
+    print("Please check your YouTube Music account if operations were expected to succeed.")
 
 if __name__ == '__main__':
-    # -------------------------------------------------------------
-    # Spotify to YouTube Music Converter Simulation - Manual Testing
-    # -------------------------------------------------------------
+    # --------------------------------------------------------------------------
+    # Spotify to YouTube Music Converter - End-to-End Testing Instructions
+    # --------------------------------------------------------------------------
     #
-    # This script simulates the transfer of music data from Spotify
-    # to YouTube Music. It uses:
-    #   - A REAL Spotify client: Fetches actual data if a Spotify API token is provided.
-    #   - A SIMULATED YouTube Music client: Mimics YouTube Music actions without real API calls.
     #
-    # --- How to Run for Testing ---
+    # This script attempts a full transfer of music data from Spotify to YouTube Music.
+    # It uses LIVE clients for both services, meaning REAL CHANGES can occur
+    # in your YouTube Music account if authentication is provided and operations succeed.
     #
-    # 1. Set your Spotify API Token:
-    #    - The script will first look for an environment variable named `SPOTIFY_API_TOKEN`.
-    #      Example (Linux/macOS): export SPOTIFY_API_TOKEN="your_actual_spotify_token_here"
-    #      Example (Windows CMD): set SPOTIFY_API_TOKEN="your_actual_spotify_token_here"
-    #      Example (Windows PowerShell): $env:SPOTIFY_API_TOKEN="your_actual_spotify_token_here"
-    #    - If the environment variable is not found, the script will prompt you to paste the token.
-    #    - IMPORTANT: Your Spotify API token is sensitive. Do not share it or commit it to version control.
-    #                 The prompt is for local testing convenience only.
-    #    - To get a token: You usually need to go through Spotify's OAuth 2.0 authorization flow.
-    #      A quick way to get a temporary one for testing is from the Spotify Web API console:
-    #      https://developer.spotify.com/console/ (e.g., choose 'Get Current User's Playlists')
-    #      Make sure to request necessary scopes (e.g., `playlist-read-private`, `user-library-read`).
+    # --- How to Run for End-to-End Testing ---
     #
-    # 2. Navigate to the directory ABOVE 'music_converter'.
-    #    For example, if your structure is /path/to/project/music_converter, cd to /path/to/project.
+    # 1. Spotify Authentication (SPOTIFY_API_TOKEN):
+    #    - Set the `SPOTIFY_API_TOKEN` environment variable to your Spotify API token.
+    #      Example (Linux/macOS): export SPOTIFY_API_TOKEN="your_spotify_token"
+    #      Example (Windows CMD): set SPOTIFY_API_TOKEN="your_spotify_token"
+    #    - If not set, the script will prompt you to paste the token.
+    #    - Get a token via Spotify's OAuth 2.0 flow or from their Web API console
+    #      (https://developer.spotify.com/console/) with scopes like
+    #      `playlist-read-private`, `user-library-read`.
     #
-    # 3. Run the script as a module:
+    # 2. YouTube Music Authentication (YTM_AUTH_JSON_PATH):
+    #    - Set the `YTM_AUTH_JSON_PATH` environment variable to the *absolute path*
+    #      of your YouTube Music authentication headers file (e.g., `headers_auth.json`).
+    #      Example (Linux/macOS): export YTM_AUTH_JSON_PATH="/path/to/your/headers_auth.json"
+    #      Example (Windows CMD): set YTM_AUTH_JSON_PATH="C:\path\to\your\headers_auth.json"
+    #    - If not set, the script will prompt for the path.
+    #    - Generate `headers_auth.json` by running `ytmusicapi setup` in your terminal
+    #      and following the instructions. This file allows `ytmusicapi` to act on your behalf.
+    #    - CRITICAL: Without this auth file, YouTube Music operations that require login
+    #                (creating playlists, adding tracks) WILL FAIL or work in a limited way.
+    #
+    # 3. Navigate to the directory ABOVE 'music_converter'.
+    #    (e.g., if structure is /project/music_converter, cd to /project)
+    #
+    # 4. Run the script as a module:
     #    python -m music_converter.converter
     #
-    # --- What to Observe ---
-    #   - Spotify Data: If a valid token is provided, you should see output indicating that
-    #     your Spotify playlists and liked songs are being fetched (names, track counts).
-    #   - YouTube Music Simulation: You will see messages about:
-    #     - Simulated searches for tracks on YouTube Music.
-    #     - Simulated creation of new playlists on YouTube Music.
-    #     - Simulated addition of (matched) tracks to these new YouTube Music playlists.
-    #   - No actual changes will be made to your YouTube Music account as this part is stubbed.
-    #   - Error Messages: If the Spotify token is invalid or network issues occur, you'll see error messages.
+    # --- What to Observe During an End-to-End Test ---
     #
-    # -------------------------------------------------------------
+    #   - Initialization: Messages indicating whether Spotify token and YTM auth path
+    #     were found/provided.
+    #   - Spotify Data Fetching:
+    #     - Logs showing successful fetching of your Spotify playlists and liked songs.
+    #     - Errors if the Spotify token is invalid or network issues occur.
+    #   - YouTube Music Operations (requires YTM_AUTH_JSON_PATH for success):
+    #     - Track Matching: Logs for each Spotify track showing attempts to find a match
+    #       on YouTube Music and the outcome (found ID or no match).
+    #     - Playlist Creation: Messages indicating attempts to create new playlists on
+    #       YouTube Music (e.g., "My Playlist (From Spotify)"). Success or failure
+    #       (especially failure if not authenticated for YTM).
+    #     - Adding Tracks: Messages about attempts to add matched tracks to the newly
+    #       created YouTube Music playlists. Success or failure.
+    #
+    #   - Final Output:
+    #     - The script will print a "Transfer process finished" message.
+    #     - CHECK YOUR YOUTUBE MUSIC ACCOUNT: If YTM authentication was valid and
+    #       operations were logged as successful, you should see new playlists and tracks.
+    #     - CHECK CONSOLE FOR ERRORS: Pay close attention to any error messages,
+    #       especially regarding authentication or API limits.
+    #
+    # --- IMPORTANT NOTES ---
+    #   - API Rate Limits: Both Spotify and YouTube Music have API rate limits.
+    #     Excessive use in a short period might lead to temporary blocks.
+    #   - Data Accuracy: Track matching is heuristic. Not all tracks may be found,
+    #     or incorrect versions might sometimes be matched.
+    #   - Use with Caution: Since this interacts with live accounts, be mindful,
+    #     especially when testing with your primary music accounts.
+    # --------------------------------------------------------------------------
 
     print("-------------------------------------------------------------")
-    print("Spotify to YouTube Music Converter Simulation")
+    print("Spotify to YouTube Music Converter - Live Clients")
     print("-------------------------------------------------------------")
-    print("This script uses a REAL Spotify client (if token provided)")
-    print("and a SIMULATED YouTube Music client.")
+    print("This script uses REAL Spotify and REAL YouTube Music clients (if auth provided).")
+    print("Ensure you have valid authentication for both services for full functionality.")
     print("-------------------------------------------------------------")
 
+    # --- Spotify Authentication ---
     spotify_token = os.environ.get("SPOTIFY_API_TOKEN")
-
     if not spotify_token:
         print("\n⚠️ SPOTIFY_API_TOKEN environment variable not set.")
         try:
-            # This input prompt is for CONVENIENCE during local interactive testing ONLY.
-            # In a real application, tokens should be handled securely (e.g., OAuth flow).
-            print("You can manually paste a Spotify API Token below to proceed with live Spotify calls.")
-            print("If you press Enter without pasting a token, Spotify calls will likely fail or use dummy data if client is robust.")
+            print("You can manually paste a Spotify API Token below.")
             spotify_token_input = input("Enter Spotify API Token (or press Enter to skip): ")
             if spotify_token_input:
                 spotify_token = spotify_token_input
-            else:
-                print("No Spotify token provided. Spotify calls may fail.")
         except KeyboardInterrupt:
             print("\nCancelled by user. Exiting.")
             sys.exit(0)
-        except EOFError: # Happens if input is piped from a non-interactive source
-            print("\nNo input received (EOF). Spotify calls may fail if token not in env.")
-
+        except EOFError:
+            print("\nNo input received for Spotify token.")
 
     if not spotify_token:
-        print("\n🛑 No Spotify API Token available. Cannot make live calls to Spotify.")
-        print("The script will run with the Spotify client attempting to use a None token, which will likely result in errors for API calls.")
-        # Initialize with a clearly invalid token to ensure failure or dummy behavior from client
-        spotify_token = "INVALID_TOKEN_DO_NOT_USE"
+        print("\n🛑 No Spotify API Token. Spotify calls will likely fail.")
+        spotify_token = "INVALID_SPOTIFY_TOKEN" # Ensure it's not None for client init
 
-    transfer_spotify_to_youtube_music(spotify_api_token=spotify_token)
+    # --- YouTube Music Authentication ---
+    ytm_auth_path = os.environ.get("YTM_AUTH_JSON_PATH")
+    if not ytm_auth_path:
+        print("\n⚠️ YTM_AUTH_JSON_PATH environment variable not set for YouTube Music.")
+        try:
+            print("This should be the path to your 'headers_auth.json' file for ytmusicapi.")
+            print("You can generate this by running `ytmusicapi setup` in your terminal.")
+            ytm_auth_path_input = input("Enter path to YouTube Music auth JSON (e.g., headers_auth.json) or press Enter to skip: ")
+            if ytm_auth_path_input:
+                ytm_auth_path = ytm_auth_path_input
+        except KeyboardInterrupt:
+            print("\nCancelled by user. Exiting.")
+            sys.exit(0)
+        except EOFError:
+            print("\nNo input received for YouTube Music auth path.")
+
+    if not ytm_auth_path:
+        print("\nℹ️ No YouTube Music auth JSON path. YouTube Music operations requiring login (like creating private playlists or adding tracks) will likely fail.")
+    elif not os.path.exists(ytm_auth_path):
+        print(f"\n⚠️ YouTube Music auth JSON file not found at: {ytm_auth_path}")
+        print("   Operations requiring login will likely fail.")
+        ytm_auth_path = None # Set to None if path is invalid
+
+    # --- Call the main transfer function ---
+    print("\n🚀 Starting transfer process...")
+    transfer_spotify_to_youtube_music(
+        spotify_api_token=spotify_token,
+        ytm_auth_json_path=ytm_auth_path
+    )

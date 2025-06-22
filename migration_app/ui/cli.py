@@ -238,6 +238,99 @@ def search_ytmusic_track_command(title, artist, album, limit):
     except Exception as e:
         click.secho(f"An unexpected error occurred: {e}", fg="red", err=True)
 
+from migration_app.migration.playlist_migrator import migrate_single_playlist # Add this
+from migration_app.matching.track_matcher import TrackMatcher # Add this
+
+@cli.command(name='migrate-playlist')
+@click.argument('spotify_playlist_id', type=str)
+@click.option(
+    '--name-prefix',
+    default="[Spotify Import] ",
+    help="Prefix for the new YouTube Music playlist name.",
+    show_default=True
+)
+@click.option(
+    '--fuzzy-threshold',
+    default=85,
+    type=int,
+    show_default=True,
+    help="Fuzzy match threshold (0-100) for track matching."
+)
+@click.option(
+    '--duration-tolerance',
+    default=10,
+    type=int,
+    show_default=True,
+    help="Duration tolerance in seconds for track matching."
+)
+def migrate_playlist_command(spotify_playlist_id, name_prefix, fuzzy_threshold, duration_tolerance):
+    """Migrate a single Spotify playlist to YouTube Music."""
+    click.echo(f"Starting migration for Spotify playlist ID: {spotify_playlist_id}")
+
+    try:
+        # 1. Authenticate and initialize clients
+        click.echo("Authenticating with Spotify...")
+        sp_sdk = get_authenticated_spotify_client() # Reuses helper from cli.py
+        spotify_client = SpotifyDataClient(sp_sdk)
+        click.secho("Spotify authentication successful.", fg="green")
+
+        click.echo("Authenticating with YouTube Music...")
+        yt_auth = YouTubeMusicAuthenticator() # From cli.py's import
+        ytm_sdk = yt_auth.get_ytmusic_client()
+        ytmusic_client = YouTubeMusicDataClient(ytm_sdk)
+        click.secho("YouTube Music authentication successful.", fg="green")
+
+        # 2. Initialize TrackMatcher with custom thresholds from CLI
+        click.echo(f"Initializing TrackMatcher with threshold: {fuzzy_threshold}%, duration tolerance: {duration_tolerance}s")
+        track_matcher = TrackMatcher(
+            ytmusic_data_client=ytmusic_client,
+            fuzzy_match_threshold=fuzzy_threshold,
+            duration_tolerance_seconds=duration_tolerance
+        )
+
+        # 3. Call the migration function
+        click.echo(f"Running migration for playlist {spotify_playlist_id}...")
+        summary = migrate_single_playlist(
+            spotify_playlist_id=spotify_playlist_id,
+            spotify_data_client=spotify_client,
+            ytmusic_data_client=ytmusic_client,
+            track_matcher=track_matcher,
+            playlist_name_prefix=name_prefix
+        )
+
+        # 4. Display summary
+        click.secho("\n--- Migration Summary ---", fg="blue", bold=True)
+        click.echo(f"Spotify Playlist ID: {summary.get('spotify_playlist_id')}")
+        click.echo(f"Status: {summary.get('status')}")
+        click.echo(f"Message: {summary.get('message')}")
+        click.echo(f"YouTube Music Playlist ID: {summary.get('yt_playlist_id', 'N/A')}")
+        click.echo(f"Tracks Processed: {summary.get('tracks_processed', 0)}")
+        click.echo(f"Tracks Matched: {summary.get('tracks_matched', 0)}")
+        click.echo(f"Tracks Added to YouTube Music: {summary.get('tracks_added_to_yt', 0)}")
+
+        unmatched_tracks = summary.get("unmatched_spotify_tracks", [])
+        if unmatched_tracks:
+            click.secho(f"\nUnmatched Spotify Tracks ({len(unmatched_tracks)}):", fg="yellow")
+            for i, track_info in enumerate(unmatched_tracks[:10]): # Display first 10
+                name = track_info.get('name', 'Unknown Name')
+                artists = track_info.get('artists', 'Unknown Artists')
+                spotify_id = track_info.get('spotify_id', 'N/A')
+                click.echo(f"  {i+1}. {name} by {artists} (ID: {spotify_id})")
+            if len(unmatched_tracks) > 10:
+                click.echo(f"  ...and {len(unmatched_tracks) - 10} more.")
+
+        click.secho("Migration attempt finished.", fg="blue")
+
+    except click.Abort:
+        # This handles failures from get_authenticated_spotify_client()
+        click.secho("CLI process aborted, likely due to Spotify authentication failure.", fg="red", err=True)
+    except YouTubeMusicAuthError as e: # Catch specific auth errors for YT
+        click.secho(f"YouTube Music authentication failed: {e}", fg="red", err=True)
+    except Exception as e:
+        click.secho(f"An unexpected error occurred during the migration command: {e}", fg="red", err=True)
+        # For debugging, you might want to re-raise or log traceback:
+        # import traceback
+        # click.echo(traceback.format_exc(), err=True)
 
 if __name__ == '__main__':
     cli()
